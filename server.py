@@ -6,6 +6,7 @@ Tools: chatgpt_ask, chatgpt_list_models
 
 import os
 import httpx
+import uvicorn
 from mcp.server.fastmcp import FastMCP
 
 # --- Configuration ---
@@ -89,7 +90,5 @@ async def chatgpt_list_models() -> str:
 
 
 if __name__ == "__main__":
-    if MCP_TRANSPORT == "streamable-http":
-        mcp.run(transport="streamable-http", host="0.0.0.0", port=PORT)
-    else:
-        mcp.run(transport="sse", host="0.0.0.0", port=PORT)
+    app = mcp.sse_app()
+    uvicorn.run(app, host="0.0.0.0", port=PORT)
