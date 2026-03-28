@@ -1,10 +1,12 @@
 """
 ChatGPT MCP Server
-Wraps the OpenAI ChatGPT API as an MCP server with SSE/Streamable HTTP transport.
+Wraps the OpenAI ChatGPT API as an MCP server.
+Supports both SSE and Streamable HTTP transports.
 Tools: chatgpt_ask, chatgpt_list_models
 """
 
 import os
+import json
 import httpx
 import uvicorn
 from starlette.applications import Starlette
@@ -97,14 +99,12 @@ async def health(request):
 
 
 class FixHostHeaderMiddleware:
-    """Rewrite the Host header to localhost so MCP's SSE host validation passes behind a reverse proxy."""
+    """Rewrite the Host header so MCP's internal validation passes behind a reverse proxy."""
     def __init__(self, app: ASGIApp):
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send):
         if scope["type"] == "http":
-            headers = dict(scope.get("headers", []))
-            # Replace host header with what the MCP server expects
             new_headers = []
             for key, value in scope.get("headers", []):
                 if key == b"host":
@@ -113,26 +113,38 @@ class FixHostHeaderMiddleware:
                     new_headers.append((key, value))
             scope = dict(scope)
             scope["headers"] = new_headers
-            # Also fix the server tuple
             scope["server"] = ("localhost", PORT)
         await self.app(scope, receive, send)
 
 
-# Build the app
+# --- Build the combined app ---
 sse_app = mcp.sse_app()
 
-app = Starlette(
-    routes=[
-        Route("/health", health),
-        Mount("/", app=sse_app),
-    ],
-    middleware=[],
-)
+# Try to get streamable HTTP app (available in newer MCP versions)
+streamable_app = None
+try:
+    streamable_app = mcp.streamable_http_app()
+except AttributeError:
+    pass
 
-# Wrap with host fix middleware
+routes = [Route("/health", health)]
+
+if streamable_app:
+    # Mount streamable HTTP at /mcp and SSE at /sse
+    routes.append(Mount("/mcp", app=streamable_app))
+    routes.append(Mount("/", app=sse_app))
+else:
+    routes.append(Mount("/", app=sse_app))
+
+app = Starlette(routes=routes)
 app = FixHostHeaderMiddleware(app)
 
 if __name__ == "__main__":
+    print(f"Starting ChatGPT MCP Server on port {PORT}")
+    print(f"SSE endpoint: /sse")
+    if streamable_app:
+        print(f"Streamable HTTP endpoint: /mcp")
+    print(f"Health endpoint: /health")
     uvicorn.run(
         app,
         host="0.0.0.0",
