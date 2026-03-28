@@ -8,6 +8,7 @@ Tools: chatgpt_ask, chatgpt_list_models
 import os
 import httpx
 import uvicorn
+from contextlib import asynccontextmanager
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse
 from starlette.routing import Route, Mount
@@ -103,7 +104,7 @@ class FixHostHeaderMiddleware:
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send):
-        if scope["type"] == "http":
+        if scope["type"] in ("http", "websocket"):
             new_headers = []
             for key, value in scope.get("headers", []):
                 if key == b"host":
@@ -116,23 +117,30 @@ class FixHostHeaderMiddleware:
         await self.app(scope, receive, send)
 
 
-# --- Build app with both transports ---
+# --- Build the app using the streamable HTTP app directly ---
+# streamable_http_app() returns a Starlette app with proper lifespan management
 streamable_app = mcp.streamable_http_app()
-sse_app = mcp.sse_app()
 
-app = Starlette(
-    routes=[
-        Route("/health", health),
-        Mount("/sse", app=sse_app),       # SSE at /sse (legacy)
-        Mount("/", app=streamable_app),    # Streamable HTTP at root (preferred)
-    ]
-)
-app = FixHostHeaderMiddleware(app)
+# We need to wrap it to add a health endpoint while preserving the lifespan
+# The streamable app already handles /mcp internally
+
+original_lifespan = streamable_app.router.lifespan_context
+
+@asynccontextmanager
+async def combined_lifespan(app):
+    async with original_lifespan(app) as state:
+        print(f"ChatGPT MCP Server running on port {PORT}")
+        print(f"Streamable HTTP: /mcp")
+        print(f"Health: /health")
+        yield state
+
+# Add the health route to the streamable app
+streamable_app.routes.insert(0, Route("/health", health))
+streamable_app.router.lifespan_context = combined_lifespan
+
+app = FixHostHeaderMiddleware(streamable_app)
 
 if __name__ == "__main__":
-    print(f"ChatGPT MCP Server starting on port {PORT}")
-    print(f"Streamable HTTP: / (primary)")
-    print(f"SSE: /sse (legacy)")
     uvicorn.run(
         app,
         host="0.0.0.0",
