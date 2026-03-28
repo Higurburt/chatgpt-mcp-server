@@ -10,6 +10,7 @@ import uvicorn
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse
 from starlette.routing import Route, Mount
+from starlette.types import ASGIApp, Receive, Scope, Send
 from mcp.server.fastmcp import FastMCP
 
 # --- Configuration ---
@@ -95,15 +96,47 @@ async def health(request):
     return JSONResponse({"status": "ok", "server": "ChatGPT MCP Server"})
 
 
-# Build the app: mount the MCP SSE app and add a health endpoint
+class FixHostHeaderMiddleware:
+    """Rewrite the Host header to localhost so MCP's SSE host validation passes behind a reverse proxy."""
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+        if scope["type"] == "http":
+            headers = dict(scope.get("headers", []))
+            # Replace host header with what the MCP server expects
+            new_headers = []
+            for key, value in scope.get("headers", []):
+                if key == b"host":
+                    new_headers.append((key, f"localhost:{PORT}".encode()))
+                else:
+                    new_headers.append((key, value))
+            scope = dict(scope)
+            scope["headers"] = new_headers
+            # Also fix the server tuple
+            scope["server"] = ("localhost", PORT)
+        await self.app(scope, receive, send)
+
+
+# Build the app
 sse_app = mcp.sse_app()
 
 app = Starlette(
     routes=[
         Route("/health", health),
         Mount("/", app=sse_app),
-    ]
+    ],
+    middleware=[],
 )
 
+# Wrap with host fix middleware
+app = FixHostHeaderMiddleware(app)
+
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=PORT)
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=PORT,
+        forwarded_allow_ips="*",
+        proxy_headers=True,
+    )
