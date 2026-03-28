@@ -7,13 +7,15 @@ Tools: chatgpt_ask, chatgpt_list_models
 import os
 import httpx
 import uvicorn
+from starlette.applications import Starlette
+from starlette.responses import JSONResponse
+from starlette.routing import Route, Mount
 from mcp.server.fastmcp import FastMCP
 
 # --- Configuration ---
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
 OPENAI_BASE_URL = "https://api.openai.com/v1"
-MCP_TRANSPORT = os.environ.get("MCP_TRANSPORT", "sse")
 PORT = int(os.environ.get("PORT", "8000"))
 
 # --- MCP Server ---
@@ -89,6 +91,19 @@ async def chatgpt_list_models() -> str:
             return f"Error listing models: {str(e)}"
 
 
+async def health(request):
+    return JSONResponse({"status": "ok", "server": "ChatGPT MCP Server"})
+
+
+# Build the app: mount the MCP SSE app and add a health endpoint
+sse_app = mcp.sse_app()
+
+app = Starlette(
+    routes=[
+        Route("/health", health),
+        Mount("/", app=sse_app),
+    ]
+)
+
 if __name__ == "__main__":
-    app = mcp.sse_app()
     uvicorn.run(app, host="0.0.0.0", port=PORT)
