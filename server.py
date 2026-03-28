@@ -1,12 +1,11 @@
 """
 ChatGPT MCP Server
 Wraps the OpenAI ChatGPT API as an MCP server.
-Supports both SSE and Streamable HTTP transports.
+Supports Streamable HTTP transport (preferred by Claude.ai).
 Tools: chatgpt_ask, chatgpt_list_models
 """
 
 import os
-import json
 import httpx
 import uvicorn
 from starlette.applications import Starlette
@@ -99,7 +98,7 @@ async def health(request):
 
 
 class FixHostHeaderMiddleware:
-    """Rewrite the Host header so MCP's internal validation passes behind a reverse proxy."""
+    """Rewrite Host header so MCP validation passes behind a reverse proxy."""
     def __init__(self, app: ASGIApp):
         self.app = app
 
@@ -117,34 +116,23 @@ class FixHostHeaderMiddleware:
         await self.app(scope, receive, send)
 
 
-# --- Build the combined app ---
+# --- Build app with both transports ---
+streamable_app = mcp.streamable_http_app()
 sse_app = mcp.sse_app()
 
-# Try to get streamable HTTP app (available in newer MCP versions)
-streamable_app = None
-try:
-    streamable_app = mcp.streamable_http_app()
-except AttributeError:
-    pass
-
-routes = [Route("/health", health)]
-
-if streamable_app:
-    # Mount streamable HTTP at /mcp and SSE at /sse
-    routes.append(Mount("/mcp", app=streamable_app))
-    routes.append(Mount("/", app=sse_app))
-else:
-    routes.append(Mount("/", app=sse_app))
-
-app = Starlette(routes=routes)
+app = Starlette(
+    routes=[
+        Route("/health", health),
+        Mount("/sse", app=sse_app),       # SSE at /sse (legacy)
+        Mount("/", app=streamable_app),    # Streamable HTTP at root (preferred)
+    ]
+)
 app = FixHostHeaderMiddleware(app)
 
 if __name__ == "__main__":
-    print(f"Starting ChatGPT MCP Server on port {PORT}")
-    print(f"SSE endpoint: /sse")
-    if streamable_app:
-        print(f"Streamable HTTP endpoint: /mcp")
-    print(f"Health endpoint: /health")
+    print(f"ChatGPT MCP Server starting on port {PORT}")
+    print(f"Streamable HTTP: / (primary)")
+    print(f"SSE: /sse (legacy)")
     uvicorn.run(
         app,
         host="0.0.0.0",
