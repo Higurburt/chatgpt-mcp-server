@@ -16,10 +16,7 @@ MCP_TRANSPORT = os.environ.get("MCP_TRANSPORT", "sse")
 PORT = int(os.environ.get("PORT", "8000"))
 
 # --- MCP Server ---
-mcp = FastMCP(
-    "ChatGPT MCP Server",
-    description="An MCP server that wraps the OpenAI ChatGPT API.",
-)
+mcp = FastMCP("ChatGPT MCP Server")
 
 
 def _openai_headers() -> dict:
